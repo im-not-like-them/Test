@@ -1,0 +1,215 @@
+// Kalanso — plateforme multi-établissements (universités, grandes écoles, lycées, collèges).
+//
+// Isolation des données : chaque table métier porte un `tenantId`. Les relations
+// entre tables métier passent par des clés étrangères composites (tenantId, id),
+// ce qui garantit au niveau de la base qu'une classe ne peut pas pointer vers
+// une filière d'un autre établissement.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum TenantType {
+  UNIVERSITE
+  GRANDE_ECOLE
+  SECONDAIRE
+}
+
+enum Sector {
+  PUBLIC
+  PRIVE
+}
+
+enum Role {
+  ADMIN
+  TEACHER
+  STUDENT
+}
+
+model Tenant {
+  id           String     @id @default(cuid())
+  slug         String     @unique
+  name         String
+  type         TenantType
+  sector       Sector     @default(PRIVE)
+  city         String     @default("Abidjan")
+  customDomain String?    @unique
+  logoUrl      String?
+  tagline      String?
+  about        String?    @db.Text
+  contactEmail String?
+  contactPhone String?
+  primaryColor String     @default("#F77F00")
+  accentColor  String     @default("#009E60")
+  createdAt    DateTime   @default(now())
+
+  users         User[]
+  academicYears AcademicYear[]
+  units         Unit[]
+  programs      Program[]
+  classGroups   ClassGroup[]
+  courses       Course[]
+  enrollments   Enrollment[]
+  announcements Announcement[]
+}
+
+model User {
+  id           String   @id @default(cuid())
+  tenantId     String
+  email        String
+  passwordHash String
+  firstName    String
+  lastName     String
+  role         Role
+  matricule    String?
+  phone        String?
+  createdAt    DateTime @default(now())
+
+  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  sessions      Session[]
+  enrollments   Enrollment[]
+  courses       Course[]
+  announcements Announcement[]
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, email])
+  @@unique([tenantId, matricule])
+}
+
+model Session {
+  // Empreinte SHA-256 du jeton : le jeton brut n'est jamais stocké.
+  id        String   @id
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model AcademicYear {
+  id        String  @id @default(cuid())
+  tenantId  String
+  label     String
+  isCurrent Boolean @default(false)
+
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  classGroups ClassGroup[]
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, label])
+}
+
+// Composante : UFR, école, institut, cycle (1er cycle / 2nd cycle au secondaire)…
+model Unit {
+  id          String  @id @default(cuid())
+  tenantId    String
+  code        String
+  name        String
+  description String? @db.Text
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  programs Program[]
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, code])
+}
+
+// Filière / parcours / série (ex. Licence Informatique, BTS Finance, Série D).
+model Program {
+  id          String  @id @default(cuid())
+  tenantId    String
+  unitId      String
+  code        String
+  name        String
+  degree      String?
+  description String? @db.Text
+
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  unit        Unit         @relation(fields: [tenantId, unitId], references: [tenantId, id], onDelete: Cascade)
+  classGroups ClassGroup[]
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, code])
+}
+
+// Classe / promotion pour une année académique (ex. L1 Informatique 2025-2026, Tle D1).
+model ClassGroup {
+  id             String @id @default(cuid())
+  tenantId       String
+  programId      String
+  academicYearId String
+  code           String
+  name           String
+  level          String
+
+  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  program       Program        @relation(fields: [tenantId, programId], references: [tenantId, id], onDelete: Cascade)
+  academicYear  AcademicYear   @relation(fields: [tenantId, academicYearId], references: [tenantId, id], onDelete: Cascade)
+  courses       Course[]
+  enrollments   Enrollment[]
+  announcements Announcement[]
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, academicYearId, code])
+}
+
+// Cours : UE/ECUE à l'université, matière au secondaire.
+model Course {
+  id           String  @id @default(cuid())
+  tenantId     String
+  classGroupId String
+  code         String
+  title        String
+  // Crédits ECTS à l'université, coefficient au secondaire.
+  weight       Int?
+  semester     Int?
+  teacherId    String?
+
+  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  classGroup ClassGroup @relation(fields: [tenantId, classGroupId], references: [tenantId, id], onDelete: Cascade)
+  // Relation optionnelle : l'appartenance au même établissement est vérifiée dans le code.
+  teacher    User?      @relation(fields: [teacherId], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, classGroupId, code])
+}
+
+model Enrollment {
+  id           String   @id @default(cuid())
+  tenantId     String
+  userId       String
+  classGroupId String
+  createdAt    DateTime @default(now())
+
+  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user       User       @relation(fields: [tenantId, userId], references: [tenantId, id], onDelete: Cascade)
+  classGroup ClassGroup @relation(fields: [tenantId, classGroupId], references: [tenantId, id], onDelete: Cascade)
+
+  @@unique([userId, classGroupId])
+  @@index([tenantId, classGroupId])
+}
+
+// Annonce : à toute l'école (classGroupId nul) ou à une classe.
+model Announcement {
+  id           String   @id @default(cuid())
+  tenantId     String
+  authorId     String
+  classGroupId String?
+  title        String
+  body         String   @db.Text
+  isPublic     Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  tenant     Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  author     User        @relation(fields: [tenantId, authorId], references: [tenantId, id], onDelete: Cascade)
+  // Relation optionnelle : l'appartenance au même établissement est vérifiée dans le code.
+  classGroup ClassGroup? @relation(fields: [classGroupId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+}

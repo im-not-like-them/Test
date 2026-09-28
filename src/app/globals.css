@@ -1,0 +1,16 @@
+@import "tailwindcss";
+
+:root {
+  --brand: #f77f00;
+  --accent: #009e60;
+}
+
+@theme inline {
+  --color-brand: var(--brand);
+  --color-accent: var(--accent);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+body {
+  @apply bg-stone-50 text-stone-900 antialiased;
+}
